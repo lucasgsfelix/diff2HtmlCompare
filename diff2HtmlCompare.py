@@ -23,6 +23,7 @@
 import io
 import os
 import sys
+import json
 import difflib
 import argparse
 import pygments
@@ -145,8 +146,8 @@ class DiffHtmlFormatter(HtmlFormatter):
         self.diffs = diffs
         super(DiffHtmlFormatter, self).__init__(*args, **kwargs)
 
-    def wrap(self, source, outfile):
-        return self._wrap_code(source)
+    #def wrap(self, source, outfile):
+     #   return self._wrap_code(source, outfile=outfile)
 
     def getDiffLineNos(self):
         retlinenos = []
@@ -276,6 +277,32 @@ class DiffHtmlFormatter(HtmlFormatter):
         yield 0, '</td></tr></table>'
 
 
+
+def read_json_files(file_path):
+
+    try:
+        with open(file_path, 'r') as f:
+            json_file = json.load(f)
+    except Exception as e:
+        print("Problem reading file %s" % file_path)
+        print(e)
+        sys.exit(1)
+
+    return json_file
+
+
+def extract_data_from_json(json_obj, field):
+
+    field_extraction = []
+
+    for line in json_obj:
+
+        # transcription
+        field_extraction.append(line['speaker'] + ": " + line[field] + "\n")
+
+    return '\n'.join(field_extraction)
+
+
 class CodeDiff(object):
     """
     Manages a pair of source files and generates a single html diff page comparing
@@ -291,58 +318,23 @@ class CodeDiff(object):
         self.filename = name
         self.fromfile = fromfile
         if fromtxt == None:
-            try:
-                with io.open(fromfile) as f:
-                    self.fromlines = f.readlines()
-            except Exception as e:
-                print("Problem reading file %s" % fromfile)
-                print(e)
-                sys.exit(1)
+            self.fromlines = read_json_files(self.fromfile)
+            self.fromlines = extract_data_from_json(self.fromlines, 'transcription')
         else:
             self.fromlines = [n + "\n" for n in fromtxt.split("\n")]
         self.leftcode = "".join(self.fromlines)
 
         self.tofile = tofile
         if totxt == None:
-            try:
-                with io.open(tofile) as f:
-                    self.tolines = f.readlines()
-            except Exception as e:
-                print("Problem reading file %s" % tofile)
-                print(e)
-                sys.exit(1)
+            self.tolines = read_json_files(self.tofile)
+            self.tolines = extract_data_from_json(self.tolines, 'transcription')
         else:
             self.tolines = [n + "\n" for n in totxt.split("\n")]
         self.rightcode = "".join(self.tolines)
 
-    def getDiffDetails(self, fromdesc='', todesc='', context=False, numlines=5, tabSize=8):
-        # change tabs to spaces before it gets more difficult after we insert
-        # markkup
-        def expand_tabs(line):
-            # hide real spaces
-            line = line.replace(' ', '\0')
-            # expand tabs into spaces
-            line = line.expandtabs(tabSize)
-            # replace spaces from expanded tabs back into tab characters
-            # (we'll replace them with markup after we do differencing)
-            line = line.replace(' ', '\t')
-            return line.replace('\0', ' ').rstrip('\n')
-
-        self.fromlines = [expand_tabs(line) for line in self.fromlines]
-        self.tolines = [expand_tabs(line) for line in self.tolines]
-
-        # create diffs iterator which generates side by side from/to data
-        if context:
-            context_lines = numlines
-        else:
-            context_lines = None
-
-        diffs = difflib._mdiff(self.fromlines, self.tolines, context_lines,
-                               linejunk=None, charjunk=difflib.IS_CHARACTER_JUNK)
-        return list(diffs)
 
     def format(self, options):
-        self.diffs = self.getDiffDetails(self.fromfile, self.tofile)
+        '''#self.diffs = self.getDiffDetails(self.fromfile, self.tofile)
 
         if options.verbose:
             for diff in self.diffs:
@@ -360,6 +352,8 @@ class CodeDiff(object):
                                      linenos=True,
                                      style=options.syntax_css)
 
+
+
             try:
                 self.lexer = guess_lexer_for_filename(self.filename, code)
 
@@ -369,9 +363,69 @@ class CodeDiff(object):
 
                 self.lexer = DefaultLexer()
 
+
             formatted = pygments.highlight(code, self.lexer, inst)
 
-            codeContents.append(formatted)
+            codeContents.append(formatted)'''
+
+
+        def paint_text(diff, original=False):
+
+
+            if original:
+
+                html_span = "<span class=\"remove\">"
+
+            else:
+
+                html_span = "<span class=\"add\">"
+
+            
+
+            close_span = "</span>"
+
+            complete_text = "<body><p class=\"text\">"
+
+            for index, (code, text) in enumerate(diff):
+
+                if code == 0:
+
+                    complete_text += text
+
+                elif code == -1 and original:
+
+                    complete_text += html_span + text + close_span
+
+                elif code == 1 and not original:
+
+                    complete_text += html_span + text + close_span
+
+
+
+
+            return complete_text.replace('\n', '<br>') + "</body></p>"
+
+
+        color_format = """<style type="text/css">
+                          p.text {color:black;font-weight:bold;font-family:Calibri;font-size:20}
+                          span.add {color:green;font-weight:bold;font-family:Calibri;font-size:20}
+                          span.remove {color:red;font-weight:bold;font-family:Calibri;font-size:20}
+                          </style>
+                          </head>
+                        """
+
+        import diff_match_patch as dmp_module
+
+        dmp = dmp_module.diff_match_patch()
+
+        diff = dmp.diff_main(''.join(self.fromlines), ''.join(self.tolines))
+
+        dmp.diff_cleanupSemantic(diff)
+
+        painted_original_code = paint_text(diff, True)
+
+        painted_modified_code = paint_text(diff)
+
 
         answers = {
             "html_title":     self.filename,
@@ -379,8 +433,8 @@ class CodeDiff(object):
             "pygments_css":   self.pygmentsCssFile % options.syntax_css,
             "diff_css":       self.diffCssFile,
             "page_title":     self.filename,
-            "original_code":  codeContents[0],
-            "modified_code":  codeContents[1],
+            "original_code":  color_format + painted_original_code,
+            "modified_code":  color_format + painted_modified_code,
             "jquery_js":      self.jqueryJsFile,
             "diff_js":        self.diffJsFile,
             "page_width":     "page-80-width" if options.print_width else "page-full-width"
@@ -407,7 +461,10 @@ if __name__ == "__main__":
     description = """Given two source files this application\
 creates an html page which highlights the differences between the two. """
 
+
     parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('file1', help='source file to compare ("before" file).')
+    parser.add_argument('file2', help='source file to compare ("after" file).')
     parser.add_argument('-s', '--show', action='store_true',
                         help='show html in a browser.')
     parser.add_argument('-p', '--print-width', action='store_true', 
@@ -415,8 +472,7 @@ creates an html page which highlights the differences between the two. """
     parser.add_argument('-c', '--syntax-css', action='store', default="vs",
         help='Pygments CSS for code syntax highlighting. Can be one of: %s' % str(PYGMENTS_STYLES))
     parser.add_argument('-v', '--verbose', action='store_true', help='show verbose output.')
-    parser.add_argument('file1', help='source file to compare ("before" file).')
-    parser.add_argument('file2', help='source file to compare ("after" file).')
+    
 
     args = parser.parse_args()
 
