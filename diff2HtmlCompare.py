@@ -27,9 +27,9 @@ import json
 import difflib
 import argparse
 import pygments
+import pdfkit
 import webbrowser
-from pygments.lexers import guess_lexer_for_filename
-from pygments.lexer import RegexLexer
+import diff_match_patch as dmp_module
 from pygments.formatters import HtmlFormatter
 from pygments.token import *
 
@@ -117,176 +117,16 @@ HTML_TEMPLATE = """
 """
 
 
-class DefaultLexer(RegexLexer):
-    """
-    Simply lex each line as a token.
-    """
+def convert_html_to_pdf(html_content, pdf_path):
 
-    name = 'Default'
-    aliases = ['default']
-    filenames = ['*']
-
-    tokens = {
-        'root': [
-            (r'.*\n', Text),
-        ]
-    }
-
-
-class DiffHtmlFormatter(HtmlFormatter):
-    """
-    Formats a single source file with pygments and adds diff highlights based on the 
-    diff details given.
-    """
-    isLeft = False
-    diffs = None
-
-    def __init__(self, isLeft, diffs, *args, **kwargs):
-        self.isLeft = isLeft
-        self.diffs = diffs
-        super(DiffHtmlFormatter, self).__init__(*args, **kwargs)
-
-    #def wrap(self, source, outfile):
-     #   return self._wrap_code(source, outfile=outfile)
-
-    def getDiffLineNos(self):
-        retlinenos = []
-        for idx, ((left_no, left_line), (right_no, right_line), change) in enumerate(self.diffs):
-            no = None
-            if self.isLeft:
-                if change:
-                    if isinstance(left_no, int) and isinstance(right_no, int):
-                        no = '<span class="lineno_q lineno_leftchange">' + \
-                            str(left_no) + "</span>"
-                    elif isinstance(left_no, int) and not isinstance(right_no, int):
-                        no = '<span class="lineno_q lineno_leftdel">' + \
-                            str(left_no) + "</span>"
-                    elif not isinstance(left_no, int) and isinstance(right_no, int):
-                        no = '<span class="lineno_q lineno_leftadd">  </span>'
-                else:
-                    no = '<span class="lineno_q">' + str(left_no) + "</span>"
-            else:
-                if change:
-                    if isinstance(left_no, int) and isinstance(right_no, int):
-                        no = '<span class="lineno_q lineno_rightchange">' + \
-                            str(right_no) + "</span>"
-                    elif isinstance(left_no, int) and not isinstance(right_no, int):
-                        no = '<span class="lineno_q lineno_rightdel">  </span>'
-                    elif not isinstance(left_no, int) and isinstance(right_no, int):
-                        no = '<span class="lineno_q lineno_rightadd">' + \
-                            str(right_no) + "</span>"
-                else:
-                    no = '<span class="lineno_q">' + str(right_no) + "</span>"
-
-            retlinenos.append(no)
-
-        return retlinenos
-
-    def _wrap_code(self, source):
-        source = list(source)
-        yield 0, '<pre>'
-
-        for idx, ((left_no, left_line), (right_no, right_line), change) in enumerate(self.diffs):
-            # print idx, ((left_no, left_line),(right_no, right_line),change)
-            try:
-                if self.isLeft:
-                    if change:
-                        if isinstance(left_no, int) and isinstance(right_no, int) and left_no <= len(source):
-                            i, t = source[left_no - 1]
-                            t = '<span class="left_diff_change">' + t + "</span>"
-                        elif isinstance(left_no, int) and not isinstance(right_no, int) and left_no <= len(source):
-                            i, t = source[left_no - 1]
-                            t = '<span class="left_diff_del">' + t + "</span>"
-                        elif not isinstance(left_no, int) and isinstance(right_no, int):
-                            i, t = 1, left_line
-                            t = '<span class="left_diff_add">' + t + "</span>"
-                        else:
-                            raise
-                    else:
-                        if left_no <= len(source):
-                            i, t = source[left_no - 1]
-                        else:
-                            i = 1
-                            t = left_line
-                else:
-                    if change:
-                        if isinstance(left_no, int) and isinstance(right_no, int) and right_no <= len(source):
-                            i, t = source[right_no - 1]
-                            t = '<span class="right_diff_change">' + t + "</span>"
-                        elif isinstance(left_no, int) and not isinstance(right_no, int):
-                            i, t = 1, right_line
-                            t = '<span class="right_diff_del">' + t + "</span>"
-                        elif not isinstance(left_no, int) and isinstance(right_no, int) and right_no <= len(source):
-                            i, t = source[right_no - 1]
-                            t = '<span class="right_diff_add">' + t + "</span>"
-                        else:
-                            raise
-                    else:
-                        if right_no <= len(source):
-                            i, t = source[right_no - 1]
-                        else:
-                            i = 1
-                            t = right_line
-                yield i, t
-            except:
-                # print "WARNING! failed to enumerate diffs fully!"
-                pass  # this is expected sometimes
-        yield 0, '\n</pre>'
-
-    def _wrap_tablelinenos(self, inner):
-        dummyoutfile = io.StringIO()
-        lncount = 0
-        for t, line in inner:
-            if t:
-                lncount += 1
-
-            # compatibility Python v2/v3
-            if sys.version_info > (3,0):
-                dummyoutfile.write(line)
-            else:
-                dummyoutfile.write(unicode(line))
-
-        fl = self.linenostart
-        mw = len(str(lncount + fl - 1))
-        sp = self.linenospecial
-        st = self.linenostep
-        la = self.lineanchors
-        aln = self.anchorlinenos
-        nocls = self.noclasses
-
-        lines = []
-        for i in self.getDiffLineNos():
-            lines.append('%s' % (i,))
-
-        ls = ''.join(lines)
-
-        # in case you wonder about the seemingly redundant <div> here: since the
-        # content in the other cell also is wrapped in a div, some browsers in
-        # some configurations seem to mess up the formatting...
-        if nocls:
-            yield 0, ('<table class="%stable">' % self.cssclass +
-                      '<tr><td><div class="linenodiv" '
-                      'style="background-color: #f0f0f0; padding-right: 10px">'
-                      '<pre style="line-height: 125%">' +
-                      ls + '</pre></div></td><td class="code">')
-        else:
-            yield 0, ('<table class="%stable">' % self.cssclass +
-                      '<tr><td class="linenos"><div class="linenodiv"><pre>' +
-                      ls + '</pre></div></td><td class="code">')
-        yield 0, dummyoutfile.getvalue()
-        yield 0, '</td></tr></table>'
-
+    pdfkit.from_string(html_content, pdf_path, options={"enable-local-file-access": True})
 
 
 def read_json_files(file_path):
 
-    try:
-        with open(file_path, 'r') as f:
-            json_file = json.load(f)
-    except Exception as e:
-        print("Problem reading file %s" % file_path)
-        print(e)
-        sys.exit(1)
+    with open(file_path, 'r') as f:
+
+        json_file = json.load(f)
 
     return json_file
 
@@ -303,183 +143,120 @@ def extract_data_from_json(json_obj, field):
     return '\n'.join(field_extraction)
 
 
-class CodeDiff(object):
-    """
-    Manages a pair of source files and generates a single html diff page comparing
-    the contents.
-    """
-    pygmentsCssFile = "./deps/codeformats/%s.css"
-    diffCssFile = "./deps/diff.css"
-    diffJsFile = "./deps/diff.js"
-    resetCssFile = "./deps/reset.css"
-    jqueryJsFile = "./deps/jquery.min.js"
+def paint_text(diff, original=False):
 
-    def __init__(self, fromfile, tofile, fromtxt=None, totxt=None, name=None):
-        self.filename = name
-        self.fromfile = fromfile
-        if fromtxt == None:
-            self.fromlines = read_json_files(self.fromfile)
-            self.fromlines = extract_data_from_json(self.fromlines, 'transcription')
-        else:
-            self.fromlines = [n + "\n" for n in fromtxt.split("\n")]
-        self.leftcode = "".join(self.fromlines)
+    if original:
 
-        self.tofile = tofile
-        if totxt == None:
-            self.tolines = read_json_files(self.tofile)
-            self.tolines = extract_data_from_json(self.tolines, 'transcription')
-        else:
-            self.tolines = [n + "\n" for n in totxt.split("\n")]
-        self.rightcode = "".join(self.tolines)
+        html_span = "<span class=\"remove\">"
 
+    else:
 
-    def format(self, options):
-        '''#self.diffs = self.getDiffDetails(self.fromfile, self.tofile)
+        html_span = "<span class=\"add\">"
 
-        if options.verbose:
-            for diff in self.diffs:
-                print("%-6s %-80s %-80s" % (diff[2], diff[0], diff[1]))
+    
+    close_span = "</span>"
 
-        fields = ((self.leftcode, True, self.fromfile),
-                  (self.rightcode, False, self.tofile))
+    complete_text = "<body><p class=\"text\">"
 
-        codeContents = []
-        for (code, isLeft, filename) in fields:
+    for index, (code, text) in enumerate(diff):
 
-            inst = DiffHtmlFormatter(isLeft,
-                                     self.diffs,
-                                     nobackground=False,
-                                     linenos=True,
-                                     style=options.syntax_css)
+        if code == 0:
+
+            complete_text += text
+
+        elif code == -1 and original:
+
+            complete_text += html_span + text + close_span
+
+        elif code == 1 and not original:
+
+            complete_text += html_span + text + close_span
 
 
-
-            try:
-                self.lexer = guess_lexer_for_filename(self.filename, code)
-
-            except pygments.util.ClassNotFound:
-                if options.verbose:
-                    print("No Lexer Found! Using default...")
-
-                self.lexer = DefaultLexer()
+    return complete_text.replace('\n', '<br>') + "</body></p>"
 
 
-            formatted = pygments.highlight(code, self.lexer, inst)
-
-            codeContents.append(formatted)'''
+def format(options, file1, file2):
 
 
-        def paint_text(diff, original=False):
-
-
-            if original:
-
-                html_span = "<span class=\"remove\">"
-
-            else:
-
-                html_span = "<span class=\"add\">"
-
-            
-
-            close_span = "</span>"
-
-            complete_text = "<body><p class=\"text\">"
-
-            for index, (code, text) in enumerate(diff):
-
-                if code == 0:
-
-                    complete_text += text
-
-                elif code == -1 and original:
-
-                    complete_text += html_span + text + close_span
-
-                elif code == 1 and not original:
-
-                    complete_text += html_span + text + close_span
-
-
-
-
-            return complete_text.replace('\n', '<br>') + "</body></p>"
-
-
-        color_format = """<style type="text/css">
+    color_format = """
+                      <style type="text/css">
                           p.text {color:black;font-weight:bold;font-family:Calibri;font-size:20}
                           span.add {color:green;font-weight:bold;font-family:Calibri;font-size:20}
                           span.remove {color:red;font-weight:bold;font-family:Calibri;font-size:20}
-                          </style>
-                          </head>
-                        """
+                      </style>
+                      </head>
+                    """
 
-        import diff_match_patch as dmp_module
+    fromlines = read_json_files(file1)
+    fromlines = extract_data_from_json(fromlines, 'transcription')
 
-        dmp = dmp_module.diff_match_patch()
+    tolines = read_json_files(file2)
+    tolines = extract_data_from_json(tolines, 'transcription')
 
-        diff = dmp.diff_main(''.join(self.fromlines), ''.join(self.tolines))
+    dmp = dmp_module.diff_match_patch()
 
-        dmp.diff_cleanupSemantic(diff)
+    diff = dmp.diff_main(''.join(fromlines), ''.join(tolines))
 
-        painted_original_code = paint_text(diff, True)
+    dmp.diff_cleanupSemantic(diff)
 
-        painted_modified_code = paint_text(diff)
+    painted_original_code = paint_text(diff, True)
+
+    painted_modified_code = paint_text(diff)
 
 
-        answers = {
-            "html_title":     self.filename,
-            "reset_css":      self.resetCssFile,
-            "pygments_css":   self.pygmentsCssFile % options.syntax_css,
-            "diff_css":       self.diffCssFile,
-            "page_title":     self.filename,
-            "original_code":  color_format + painted_original_code,
-            "modified_code":  color_format + painted_modified_code,
-            "jquery_js":      self.jqueryJsFile,
-            "diff_js":        self.diffJsFile,
-            "page_width":     "page-80-width" if options.print_width else "page-full-width"
-        }
+    answers = {
+        "html_title":     "Transcript Comparision",
+        "reset_css":      os.getcwd() +  "/deps/reset.css",
+        "pygments_css":   os.getcwd() + "/deps/codeformats/%s.css" % 'vs',
+        "diff_css":       os.getcwd() + "/deps/diff.css",
+        "page_title":     "Transcript Comparision",
+        "original_code":  color_format + painted_original_code,
+        "modified_code":  color_format + painted_modified_code,
+        "jquery_js":      os.getcwd() +  "/deps/jquery.min.js",
+        "diff_js":        os.getcwd() +  "/deps/diff.js",
+        "page_width":     "page-80-width" if False else "page-full-width"
+    }
 
-        self.htmlContents = HTML_TEMPLATE % answers
+    htmlContents = HTML_TEMPLATE % answers
 
-    def write(self, path):
-        fh = io.open(path, 'w')
-        fh.write(self.htmlContents)
-        fh.close()
+    return htmlContents
+
+def write(path, htmlContents):
+    fh = io.open(path, 'w')
+    fh.write(htmlContents)
+    fh.close()
 
 
 def main(file1, file2, outputpath, options):
-    codeDiff = CodeDiff(file1, file2, name=file2)
-    codeDiff.format(options)
-    codeDiff.write(outputpath)
 
-def show(outputpath):
-    path = os.path.abspath(outputpath)
-    webbrowser.open('file://' + path)
+    output_html = format(options, file1, file2)
+
+    write(outputpath, output_html)
+
 
 if __name__ == "__main__":
-    description = """Given two source files this application\
-creates an html page which highlights the differences between the two. """
 
-
-    parser = argparse.ArgumentParser(description=description)
+    parser = argparse.ArgumentParser()
     parser.add_argument('file1', help='source file to compare ("before" file).')
     parser.add_argument('file2', help='source file to compare ("after" file).')
-    parser.add_argument('-s', '--show', action='store_true',
-                        help='show html in a browser.')
-    parser.add_argument('-p', '--print-width', action='store_true', 
-        help='Restrict code to 80 columns wide. (printer friendly in landscape)')
-    parser.add_argument('-c', '--syntax-css', action='store', default="vs",
-        help='Pygments CSS for code syntax highlighting. Can be one of: %s' % str(PYGMENTS_STYLES))
-    parser.add_argument('-v', '--verbose', action='store_true', help='show verbose output.')
-    
 
     args = parser.parse_args()
 
-    if args.syntax_css not in PYGMENTS_STYLES:
-        raise ValueError("Syntax CSS (-c) must be one of %r." % PYGMENTS_STYLES)
 
     outputpath = "index.html"
+
     main(args.file1, args.file2, outputpath, args)
-    if args.show:
-        show(outputpath)
+
+
+    with open(outputpath, "r") as file:
+
+        html_source = file.read()
+
+
+
+    convert_html_to_pdf(html_source, "output.pdf")
+
+    #makepdf(html_source, 'from_html.pdf')
+
+    #asyncio.get_event_loop().run_until_complete(generate_pdf_from_html(html_source, 'from_html.pdf'))
